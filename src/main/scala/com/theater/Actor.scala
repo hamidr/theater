@@ -19,11 +19,6 @@ sealed trait ActorRef[T] {
   def cascadeStop: Stream[IO, Nothing]
 }
 
-trait ActorEvent {
-  def notify(ter: ActorState.Terminated): IO[Unit]
-  def cascadeStop: Stream[IO, Nothing]
-}
-
 final case class DeadLetter[T](dead: ActorRef[T]) extends Exception("Dead actor found")
 final case class StopThenEscalate(ex: Throwable) extends Exception(ex)
 case object StopFlow extends Exception()
