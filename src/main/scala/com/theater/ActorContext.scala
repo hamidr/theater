@@ -19,7 +19,7 @@ private class Context[T](
   private val children: Ref[IO, Map[UUID, Context[?]]] = Ref.unsafe(Map.empty)
   private val watching: Ref[IO, Set[UUID]] = Ref.unsafe(Set.empty)
 
-  def onStop(): IO[Unit] = {
+  private def onStop(): IO[Unit] = {
     val ctxList = children.get.map(_.values.toList)
     Stream.evals(ctxList)
       .evalMap(_.self.stop())
@@ -28,7 +28,7 @@ private class Context[T](
       >> watching.set(Set.empty)
   }
 
-  def installWatcher(childRef: ActorRef[?]): IO[Unit] = execContext.execute {
+  private def installWatcher(childRef: ActorRef[?]): IO[Unit] = execContext.execute {
     childRef.events.evalTap(self.notify).drain
   }
 
@@ -43,26 +43,22 @@ private class Context[T](
     }
   }
 
-  override def spawnAnonymously[A](behavior: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]] = {
+  override def spawnAnonymously[A](setup: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]] = {
     for {
       mailBox <- MessageBox.init[A](mailSettings)
-      actorRef <- Actor.init[A](name, mailBox)
+      actorRef <- Actor.init[A](name, mailBox, setup)
       ctx = Context[A](execContext, actorRef)
-      initBehavior <- behavior.eval(ctx)
-      _ <- actorRef.initBehavior(initBehavior)
       process = actorRef.process(Stream.empty, ctx)
         .onFinalize(ctx.onStop())
       _ <- execContext.execute(process)
     } yield actorRef
   }
 
-  override def spawn[A](behavior: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings): IO[ActorRef[A]] = {
+  override def spawn[A](setup: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings): IO[ActorRef[A]] = {
     for {
       mailBox <- MessageBox.init[A](mailSettings)
-      actorRef <- Actor.init[A](name, mailBox)
+      actorRef <- Actor.init[A](name, mailBox, setup)
       ctx = Context[A](execContext, actorRef)
-      initBehavior <- behavior.eval(ctx)
-      _ <- actorRef.initBehavior(initBehavior)
       _ <- children.update(_.updated(actorRef.id, ctx))
       _ <- installWatcher(actorRef)
       removeChild = children.update(_.removed(actorRef.id))

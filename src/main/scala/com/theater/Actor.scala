@@ -48,33 +48,31 @@ final class Actor[T](
   mailBox: MessageBox[T],
   stopCommand: SignallingRef[IO, Boolean],
   deathSignal: Channel[IO, Terminated],
-  deathReport: Channel[IO, Terminated]
+  deathReport: Channel[IO, Terminated],
+  setup: BehaviorSetup[T]
 ) extends ActorRef[T] {
   import ActorState.*
 
   private val isDead: Ref[IO, Boolean] =
     Ref.unsafe(false)
 
-  private val refBehavior: Ref[IO, (Behavior[T], Behavior[T])] =
-    Ref.unsafe((Pass[T], Pass[T]))
+  private val refBehavior: Ref[IO, Behavior[T]] =
+    Ref.unsafe(Pass[T])
 
-  val closed: IO[Unit] = {
+  private val closed: IO[Unit] = {
     deathReport.close.void
       >> deathSignal.close.void
       >> isDead.set(true)
   }
 
-  def initBehavior(behavior: Behavior[T]): IO[Unit] =
-    refBehavior.set((behavior, behavior))
-
-  private def resetBehavior(): IO[Unit] =
-    refBehavior.update((init, _) => (init, init))
+  private def initBehavior(ctx: ActorContext[T]): IO[Unit] =
+    setup.eval(ctx).flatMap(setBehavior)
 
   private def currentBehavior: IO[Behavior[T]] =
-    refBehavior.get.map(_._2)
+    refBehavior.get
 
   private def setBehavior(next: Behavior[T]): IO[Unit] =
-    refBehavior.update((init, _) => (init, next))
+    refBehavior.set(next)
 
   private val processDeathEvents: Stream[IO, Nothing] =
     deathReport.stream.evalTap(onSignal).drain
@@ -86,8 +84,7 @@ final class Actor[T](
   private def raiseSignal(newState: ActorState): IO[Unit] = {
     val observeAct = newState match {
       case ter: Terminated => deathSignal.send(ter).void
-      case PreRestart => resetBehavior()
-      case PreStart | PostStop => IO.unit
+      case PreRestart | PreStart | PostStop => IO.unit
     }
 
     observeAct >> onSignal(newState)
@@ -112,7 +109,8 @@ final class Actor[T](
 
   def process(parentEvent: Process, ctx: ActorContext[T]): Process = {
     Stream
-      .eval(raiseSignal(PreStart))
+      .eval(initBehavior(ctx))
+      .evalTap(_ => raiseSignal(PreStart))
       >> parentEvent.mergeHaltR(cascadeStop.mergeHaltR(mailBox.messages))
       .evalMap { msg =>
         for {
@@ -121,7 +119,7 @@ final class Actor[T](
             .handleErrorWith(curr.handleError)
           _ <- next match {
             case _: Same[T] => IO.unit
-            case _: Restart[T] => raiseSignal(PreRestart)
+            case _: Restart[T] => raiseSignal(PreRestart) >> initBehavior(ctx)
             case _: Stop[T] => IO.raiseError(StopFlow)
             case _ => (curr != next).foldM(IO.unit)(setBehavior(next))
           }
@@ -141,13 +139,13 @@ final class Actor[T](
 }
 
 object Actor {
-  def init[T](name: String, mailBox: MessageBox[T]): IO[Actor[T]] = {
+  def init[T](name: String, mailBox: MessageBox[T], setup: BehaviorSetup[T]): IO[Actor[T]] = {
     for {
       id <- UUIDGen[IO].randomUUID
       deathSignal <- Channel.bounded[IO, Terminated](1)
       deathReport <- Channel.bounded[IO, Terminated](1)
       stopCommand <- SignallingRef.of[IO, Boolean](true)
-    } yield Actor[T](id, name, mailBox, stopCommand, deathSignal, deathReport)
+    } yield Actor[T](id, name, mailBox, stopCommand, deathSignal, deathReport, setup)
   }
 }
 
