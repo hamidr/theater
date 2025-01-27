@@ -21,9 +21,9 @@ class ActorSystem(
   def spawn[A](behavior: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]] =
     rootCtx.spawnAnonymously(behavior, name, mailSettings)
 
-  def increment(): IO[Unit] = processCount.update(_ + 1)
+  private def increment(): IO[Unit] = processCount.update(_ + 1)
 
-  def decrement(): IO[Unit] = processCount.flatModify {
+  private def decrement(): IO[Unit] = processCount.flatModify {
     case 1 => (0, waitSignal.set(true))
     case n => (n - 1, IO.unit)
   }

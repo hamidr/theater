@@ -62,7 +62,7 @@ private class Context[T](
       _ <- children.update(_.updated(actorRef.id, ctx))
       _ <- installWatcher(actorRef)
       removeChild = children.update(_.removed(actorRef.id))
-      process = actorRef.process(self.cascadeStop, ctx)
+      process = actorRef.process(self.stopEvent, ctx)
         .onFinalize(removeChild)
         .onFinalize(ctx.onStop())
       _ <- execContext.execute(process)

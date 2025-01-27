@@ -41,22 +41,17 @@ object MessageBox {
     }
   }
 
-  private class UnlimitedMailBox[T](queue: Queue[IO, T]) extends MessageBox[T] {
-    def messages: Stream[IO, T] = Stream.fromQueueUnterminated(queue)
-    def push(msg: T): IO[Unit] = queue.offer(msg)
-  }
-
-  private class LimitedMailBox[T](queue: Queue[IO, T]) extends MessageBox[T] {
+  private class QueueMailBox[T](queue: Queue[IO, T]) extends MessageBox[T] {
     def messages: Stream[IO, T] = Stream.fromQueueUnterminated(queue)
     def push(msg: T): IO[Unit] = queue.offer(msg)
   }
 
   def init[T](mailBoxSettings: MailBoxSettings): IO[MessageBox[T]] = mailBoxSettings match {
-    case Unbounded => Queue.unbounded[IO, T].map(queue => UnlimitedMailBox[T](queue))
-    case Bounded(n) if n > 0 => Queue.bounded[IO, T](n).map(queue => LimitedMailBox[T](queue))
+    case Unbounded => Queue.unbounded[IO, T].map(queue => QueueMailBox[T](queue))
+    case Bounded(n) if n > 0 => Queue.bounded[IO, T](n).map(queue => QueueMailBox[T](queue))
     case DropOldIfFull(n) if n > 0 => lockedMailBox(n, DropOld)
     case DropNewIfFull(n) if n > 0 => lockedMailBox(n, DropNew)
-    case _ => IO.raiseError(new Exception("Defined size for queue is unacceptable")) //TODO: Not handled
+    case _ => IO.raiseError(new Exception("Defined size for queue is unacceptable"))
   }
 
   private def lockedMailBox[T](n: Int, state: QueueState): IO[MessageBox[T]] = Mutex[IO] >>= { lock =>

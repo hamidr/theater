@@ -3,6 +3,7 @@ package com.theater
 import cats.effect.std.UUIDGen
 import cats.effect.{IO, Ref}
 import cats.implicits.*
+import com.theater
 import com.theater.ActorState.Terminated
 import fs2.*
 import fs2.concurrent.{Channel, SignallingRef}
@@ -16,7 +17,7 @@ sealed trait ActorRef[T] {
   def stop(): IO[Unit]
   def events: Stream[IO, ActorState.Terminated]
   def notify(ter: ActorState.Terminated): IO[Unit]
-  def cascadeStop: Stream[IO, Nothing]
+  def stopEvent: Stream[IO, Nothing]
 }
 
 final case class DeadLetter[T](dead: ActorRef[T]) extends Exception("Dead actor found")
@@ -35,7 +36,7 @@ object RootActor extends ActorRef[Nothing] {
   override val name: String = "RootActor"
   override def send(msg: Nothing): IO[Unit] = IO.unit
   override def notify(ter: ActorState.Terminated): IO[Unit] = IO.unit
-  override def cascadeStop: Stream[IO, Nothing] = Stream.empty
+  override def stopEvent: Stream[IO, Nothing] = Stream.empty
   override val events: Stream[IO, Terminated] = Stream.empty
   override def stop(): IO[Unit] = IO.unit
 }
@@ -50,7 +51,7 @@ final class Actor[T](
   deathSignal: Channel[IO, Terminated],
   deathReport: Channel[IO, Terminated],
   setup: BehaviorSetup[T]
-) extends ActorRef[T] {
+) extends ActorRef[T]:
   import ActorState.*
 
   private val isDead: Ref[IO, Boolean] =
@@ -65,14 +66,14 @@ final class Actor[T](
       >> isDead.set(true)
   }
 
-  private def initBehavior(ctx: ActorContext[T]): IO[Unit] =
+  private def initBehavior(ctx: ActorContext[T]): IO[Behavior[T]] =
     setup.eval(ctx).flatMap(setBehavior)
 
   private def currentBehavior: IO[Behavior[T]] =
     refBehavior.get
 
-  private def setBehavior(next: Behavior[T]): IO[Unit] =
-    refBehavior.set(next)
+  private def setBehavior(next: Behavior[T]): IO[Behavior[T]] =
+    refBehavior.set(next).as(next)
 
   private val processDeathEvents: Stream[IO, Nothing] =
     deathReport.stream.evalTap(onSignal).drain
@@ -81,13 +82,13 @@ final class Actor[T](
     currentBehavior >>= (_.signal(state))
   }
 
-  private def raiseSignal(newState: ActorState): IO[Unit] = {
+  private def raiseSignal(newState: ActorState): Behavior[T] => IO[Unit] = behavior => {
     val observeAct = newState match {
       case ter: Terminated => deathSignal.send(ter).void
       case PreRestart | PreStart | PostStop => IO.unit
     }
 
-    observeAct >> onSignal(newState)
+    observeAct >> behavior.signal(newState)
   }
 
   override def events: Stream[IO, ActorState.Terminated] =
@@ -101,42 +102,44 @@ final class Actor[T](
     case true  => IO.raiseError(DeadLetter(this))
   }
 
-  def cascadeStop: Process =
-    Stream.raiseError(StopFlow).pauseWhen(stopCommand)
+  def stopEvent: Process =
+    Stream.raiseError(StopFlow)
+      .pauseWhen(stopCommand)
 
   def stop(): IO[Unit] =
     stopCommand.set(false)
 
-  def process(parentEvent: Process, ctx: ActorContext[T]): Process = {
+  def process(caseCadeSignal: Process, ctx: ActorContext[T]): Process =
     Stream
-      .eval(initBehavior(ctx))
-      .evalTap(_ => raiseSignal(PreStart))
-      >> parentEvent.mergeHaltR(cascadeStop.mergeHaltR(mailBox.messages))
+      .eval(initBehavior(ctx) >>= raiseSignal(PreStart))
+    >> caseCadeSignal.mergeHaltR(
+        stopEvent.mergeHaltR(
+          mailBox.messages))
       .evalMap { msg =>
         for {
-          curr <- currentBehavior
-          next <- IO.defer(curr.receive(ctx, msg))
-            .handleErrorWith(curr.handleError)
+          behavior <- currentBehavior
+          next <- IO.defer(behavior.receive(ctx, msg))
+            .handleErrorWith(behavior.handleError)
           _ <- next match {
-            case _: Same[T] => IO.unit
-            case _: Restart[T] => raiseSignal(PreRestart) >> initBehavior(ctx)
-            case _: Stop[T] => IO.raiseError(StopFlow)
-            case _ => (curr != next).foldM(IO.unit)(setBehavior(next))
+            case _: Same[T]    => IO.unit
+            case _: Restart[T] => raiseSignal(PreRestart)(behavior) >> initBehavior(ctx).void
+            case _: Stop[T]    => IO.raiseError(StopFlow)
+            case state         => (behavior != state).foldM(IO.unit)(setBehavior(state).void)
           }
         } yield ()
       }
       .attempt
-      .evalTap { // do not mess with the flow
-        case Left(StopFlow) => raiseSignal(PostStop)
-        case Left(err)      => raiseSignal(Terminated(this, err))
+      .evalTap {
+        case Left(StopFlow) => currentBehavior >>= raiseSignal(PostStop)
+        case Left(err)      => currentBehavior >>= raiseSignal(Terminated(this, err))
         case Right(_)       => IO.unit
       }
       .takeWhile(_.isRight)
       .drain
       .mergeHaltL(processDeathEvents)
       .onFinalize(closed)
-  }
-}
+  end process
+end Actor
 
 object Actor {
   def init[T](name: String, mailBox: MessageBox[T], setup: BehaviorSetup[T]): IO[Actor[T]] = {
