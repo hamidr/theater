@@ -5,7 +5,6 @@ import cats.effect.std.{Dequeue, Mutex, Queue}
 import fs2.*
 import cats.implicits.*
 
-
 enum MailBoxSettings:
   case Unbounded
   case Bounded(cap: Int)
@@ -52,6 +51,8 @@ private class QueueMailBox[T](queue: Queue[IO, T]) extends MessageBox[T]:
   def push(msg: T): IO[Unit]  = queue.offer(msg)
 end QueueMailBox
 
+object IllegalStateMailbox extends Exception("Defined size for queue is unacceptable")
+
 object MessageBox:
   import MailBoxSettings.*
   import QueueState.*
@@ -62,7 +63,7 @@ object MessageBox:
       case Bounded(n) if n > 0 => Queue.bounded[IO, T](n).map(queue => QueueMailBox[T](queue))
       case DropOldIfFull(n) if n > 0 => lockedMailBox(n, DropOld)
       case DropNewIfFull(n) if n > 0 => lockedMailBox(n, DropNew)
-      case _ => IO.raiseError(new Exception("Defined size for queue is unacceptable"))
+      case _ => IO.raiseError(IllegalStateMailbox)
   end init
 
   private def lockedMailBox[T](n: Int, state: QueueState): IO[MessageBox[T]] =

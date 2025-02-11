@@ -25,7 +25,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   }
 
   "Must handle compose exception handling and applying it from inner to outer layer" in {
-    val start: Behavior[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    val start: BehaviorSpec[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       val z: Int = ???
       IO.delay(z + 1) >> Behaviors.same
     .onFailure[java.lang.ArithmeticException](Supervisor.resume)
@@ -37,7 +37,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   "Must restart from its starting state/behavior on failure as specified" in {
     val proof = Ref.unsafe[IO, List[Int]](Nil)
 
-    def testSubject(state: Int): Behavior[Unit] =
+    def testSubject(state: Int): BehaviorSpec[Unit] =
       Behaviors.receive[Unit]: (ctx, _) =>
         val causeToRestart = proof.get
           .map(_.size)
@@ -50,11 +50,11 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     .onFailure[java.lang.ArithmeticException](Supervisor.restart)
     .onFailure[NotImplementedError](Supervisor.stop)
 
-    val start: Behavior[Unit] = Behaviors.receive: (ctx, _) =>
+    val start: BehaviorSpec[Unit] = Behaviors.receive: (ctx, _) =>
       for
         newActor <- ctx.spawnAnonymously(testSubject(0), "testSubject")
-        _ <- Stream.range[IO, Int](0, 10).evalTap(_ => newActor.send(())).compile.drain
-        done <- Behaviors.stop[Unit]
+        _        <- Seq.range(0, 10).evalTap(_ => newActor.send(()))
+        done     <- Behaviors.stop[Unit]
       yield done
 
     selfStart(start) >> proof.get.asserting(_ shouldBe List(0, 1, 2, 0, 0, 1, 2, 0, 1, 2))

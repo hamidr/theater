@@ -8,7 +8,7 @@ The following code results in printing "Hello World!" by creating an actor and s
 
 ```scala 3
 // A behavior is how an actor handles a message
-// Every actor after handling a message must return a new Behavior, here by using "Behaviors.same"
+// Every actor after handling a message must return a new BehaviorSpec, here by using "Behaviors.same"
 // the next behavior stays the same.
 val aPrinter = 
   Behaviors.receive[String]: (_, msg) =>
@@ -54,7 +54,7 @@ You can read the code like this:
     val init = Behaviors.setup[State]: ctx =>
       Seq("v1", "v2").evalTap: name =>
         ctx.self.send(State.Var(name))
-      >> logVar.asIO
+      .as(logVar)
     
     init.spawn("test")
       >> IO.sleep(150.milliseconds)
