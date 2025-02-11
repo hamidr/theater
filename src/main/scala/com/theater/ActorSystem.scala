@@ -22,7 +22,7 @@ class ActorSystem(
   private val processCount =
     Ref.unsafe[IO, Int](0)
 
-  def spawn[A](behavior: BehaviorSetup[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]] =
+  def spawn[A](behavior: Behavior[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]] =
     rootCtx.spawnAnonymously(behavior, name, mailSettings)
 
   private def increment(): IO[Unit] =
@@ -54,11 +54,11 @@ object ActorSystem:
     waitSignal     <- SignallingRef.of[IO, Boolean](false)
   yield ActorSystem(shutdownSignal, waitSignal)
 
-  def run[T](starter: BehaviorSetup[T]): IO[Unit] =
+  def run[T](starter: Behavior[T]): IO[Unit] =
     for
       sys <- ActorSystem.init
-      _ <- sys.spawn(starter, "init")
-      _ <- sys.waitOnStop
+      _   <- sys.spawn(starter, "init")
+      _   <- sys.waitOnStop
     yield ()
   end run
 end ActorSystem

@@ -1,5 +1,5 @@
 name := "theater"
-version := "0.1"
+version := "0.3"
 scalaVersion := "3.6.2"
 maintainer := "hamidr.dev@gmail.com"
 

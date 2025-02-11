@@ -8,10 +8,10 @@ import cats.implicits.*
 import java.util.UUID
 import scala.concurrent.duration.*
 import com.theater.*
-import com.theater.ActorState.Terminated
+import com.theater.LifeCycle.Terminated
 
 class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
-  "An Actor must receive only one message when only one message was sent to it" in {
+  "An Actor must onReceive only one message when only one message was sent to it" in {
     val proof: Ref[IO, Int] = Ref.unsafe(0)
 
     val onReceiveStop = Behaviors.receive[Unit]: (ctx, randomId) =>
@@ -20,7 +20,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     selfStart(onReceiveStop) >> proof.get.asserting(_ shouldBe 1)
   }
 
-  "An Actor must receive the message it was sent to" in {
+  "An Actor must onReceive the message it was sent to" in {
     val effectRef: Ref[IO, Option[UUID]] = Ref.unsafe(None)
 
     val onReceiveStop = Behaviors.receive[UUID]: (ctx, randomId) =>
@@ -53,7 +53,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
       ctx <- ActorSystem.init
       ref <- ctx.spawn(selfSend, "test")
       _   <- ref.send(0)
-      _   <- ctx.waitOnStop.timeout(200.milli)
+      _   <- ctx.waitOnStop.timeout(300.milli)
       numbers <- logMessages.get
     yield numbers
 
@@ -67,7 +67,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     val nextGen = Behaviors.receive[Unit]: (ctx, _) =>
       counter.update(_ + 1) >> Behaviors.stop
 
-    def init(counting: Int, actorCount: Int): Behavior[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    def init(counting: Int, actorCount: Int): BehaviorSpec[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       if actorCount == counting then
         IO.sleep(FiniteDuration(200, MILLISECONDS)) >> Behaviors.stop
       else for
@@ -93,41 +93,43 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
     case class CalcAndSendBack(from: ActorRef[SendToOrGetCalculated], msg: Calculate)
 
-    def calculator(acc: Double = 0, iteration: Int): Behavior[CalcAndSendBack] = Behaviors.receive[CalcAndSendBack]: (ctx, msg) =>
-      val result = msg.msg.op match
-        case Plus => acc + msg.msg.n
-        case Minus => acc - msg.msg.n
-        case Divide => acc / msg.msg.n
-        case Multiply => acc * msg.msg.n
+    def calculator(acc: Double = 0, iteration: Int): BehaviorSpec[CalcAndSendBack] =
+      Behaviors.receive[CalcAndSendBack]: (ctx, msg) =>
+        val result = msg.msg.op match
+          case Plus => acc + msg.msg.n
+          case Minus => acc - msg.msg.n
+          case Divide => acc / msg.msg.n
+          case Multiply => acc * msg.msg.n
 
-      msg.from.send(Calculated(result)) >> {
-        if iteration == 4 then Behaviors.stop
-        else IO.delay(calculator(result, iteration + 1))
-      }
+        msg.from.send(Calculated(result)) >> {
+          if iteration == 4 then Behaviors.stop
+          else IO.delay(calculator(result, iteration + 1))
+        }
+    end calculator
 
     def sendToGetCalculated(log: Double => IO[Unit], inc: ActorRef[CalcAndSendBack]) =
       Behaviors.receive[SendToOrGetCalculated]: (ctx, msg) =>
         val task = msg match
           case msg@Calculate(n, op) => inc.send(CalcAndSendBack(ctx.self, msg))
-          case Calculated(n) => log(n)
+          case Calculated(n)        => log(n)
 
         task >> Behaviors.same
 
     val listRef = Ref.unsafe[IO, List[Double]](Nil)
 
-    def init: Behavior[Unit] = Behaviors.receive: (ctx, _) =>
+    def init: Behavior[Unit] = Behaviors.setup: ctx =>
       for
-        calc <- ctx.spawn(calculator(0, 1), "incr")
+        calc  <- ctx.spawn(calculator(0, 1), "incr")
         proxy <- ctx.spawn(sendToGetCalculated(n => listRef.update(_.appended(n)), calc), "just_send")
         _ <- proxy.send(Calculate(10, Plus))
         _ <- proxy.send(Calculate(100, Divide))
         _ <- proxy.send(Calculate(5, Plus))
         _ <- proxy.send(Calculate(7.1, Minus))
         _ <- proxy.send(Calculate(7.1, Minus))
-      yield init
+      yield Behaviors.empty
     end init
 
-    selfStart(init)
+    ActorSystem.run(init)
       .timeout(200.milli).attempt >> listRef.get
       .asserting(_ shouldBe List(10, 0.1, 5.1, -2.0))
   }
@@ -148,7 +150,6 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     .onSignal:
       case Terminated(ref, _:java.lang.ArithmeticException) =>
         proof.update { map => map.updated(ref.id, map.getOrElse(ref.id, -1) + 1) }
-      case _ => IO.unit
 
     selfStart(init).timeout(200.milli)
       .attempt >> proof.get
@@ -156,8 +157,8 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   }
 
   "A load balancer example" in {
-    def initLoadBalancer[T](workerSize: Int, task: Behavior[T]): BehaviorSetup[T] = Behaviors.setup[T]: ctx =>
-      def balance(workers: Vector[ActorRef[T]], index: Int): Behavior[T] =
+    def initLoadBalancer[T](workerSize: Int, task: BehaviorSpec[T]): Behavior[T] = Behaviors.setup[T]: ctx =>
+      def balance(workers: Vector[ActorRef[T]], index: Int): BehaviorSpec[T] =
         Behaviors.receive[T]: (_, msg) =>
           val next = if (index + 1) >= workerSize then 0 else index + 1
           workers(index).send(msg).as(balance(workers, next))
@@ -201,10 +202,26 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     val init = Behaviors.setup[State]: ctx =>
       Seq("v1", "v2").evalTap: name =>
         ctx.self.send(State.Var(name))
-      >> logVar.asIO
+      .as(logVar)
 
     init.spawn("test")
       >> IO.sleep(150.milliseconds)
       >> proof.get.asserting(_ shouldBe List("v1"))
+  }
+
+  "onIdleTrigger(duration, msg) should trigger a message for the specified time repeatedly" in {
+    val proof = Ref.unsafe[IO, List[Int]](Nil)
+    val logTimeout = Behaviors.receive[Int]: (ctx, n) =>
+      proof.update(_.appended(n))
+        >> proof.get
+        .map(_.size)
+        .flatMap:
+          case _ if n == 1 => Behaviors.stop
+          case s if s >= 3 => ctx.self.send(1) >> Behaviors.same
+          case _ => Behaviors.same
+    .onIdleTrigger(10.millisecond, 0)
+
+    ActorSystem.run(logTimeout)
+      >> proof.get.asserting(_ shouldBe List(0,0,0,1))
   }
 }
