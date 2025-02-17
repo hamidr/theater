@@ -5,6 +5,9 @@ import com.theater.MailBoxSettings.Unbounded
 import fs2.*
 import fs2.concurrent.SignallingRef
 
+import java.util.concurrent.*
+import scala.concurrent.ExecutionContext
+
 trait System:
   def execute(process: Process): IO[Unit]
   def waitOnStop: IO[Unit]
@@ -14,8 +17,7 @@ end System
 class ActorSystem(
   shutdownSignal: SignallingRef[IO, Boolean],
   waitSignal: SignallingRef[IO, Boolean]
-) extends System:
-
+)(using ec: ExecutionContext) extends System:
   private val rootCtx: ActorContext[Nothing] =
     Context[Nothing](this, RootActor)
 
@@ -38,7 +40,9 @@ class ActorSystem(
       process.interruptWhen(shutdownSignal)
         .onFinalize(decrement())
         .compile.drain
-        .start.void
+        .startOn(ec)
+        .void
+  end execute
 
   override def shutdown(): IO[Unit] =
    shutdownSignal.set(true) >> waitOnStop
@@ -49,6 +53,9 @@ class ActorSystem(
 end ActorSystem
 
 object ActorSystem:
+  private given executionContext: ExecutionContext =
+    ExecutionContext.fromExecutorService(Executors.newVirtualThreadPerTaskExecutor())
+
   def init: IO[ActorSystem] = for
     shutdownSignal <- SignallingRef.of[IO, Boolean](false)
     waitSignal     <- SignallingRef.of[IO, Boolean](false)

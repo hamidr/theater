@@ -4,7 +4,6 @@ import com.theater.*
 import org.scalatest.freespec.AsyncFreeSpec
 import org.scalatest.matchers.should.Matchers
 import cats.implicits.*
-import fs2.*
 
 class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   "Exceptions must be propagated to onFailure" in {
@@ -25,7 +24,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   }
 
   "Must handle compose exception handling and applying it from inner to outer layer" in {
-    val start: BehaviorSpec[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    val start: BehaviorLens[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       val z: Int = ???
       IO.delay(z + 1) >> Behaviors.same
     .onFailure[java.lang.ArithmeticException](Supervisor.resume)
@@ -50,7 +49,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     .onFailure[java.lang.ArithmeticException](Supervisor.restart)
     .onFailure[NotImplementedError](Supervisor.stop)
 
-    val start: BehaviorSpec[Unit] = Behaviors.receive: (ctx, _) =>
+    val start: BehaviorLens[Unit] = Behaviors.receive: (ctx, _) =>
       for
         newActor <- ctx.spawnAnonymously(testSubject(0), "testSubject")
         _        <- Seq.range(0, 10).evalTap(_ => newActor.send(()))

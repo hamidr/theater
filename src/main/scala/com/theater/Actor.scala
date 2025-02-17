@@ -63,13 +63,13 @@ final class Actor[T](
   private val isDead: Ref[IO, Boolean] =
     Ref.unsafe(false)
 
-  private val refBehavior: Ref[IO, BehaviorSpec[T]] =
-    Ref.unsafe(Pass[T])
-
   private val closed: IO[Unit] =
     deathReport.close.void
       >> deathSignal.close.void
       >> isDead.set(true)
+
+  private val refBehavior: Ref[IO, BehaviorSpec[T]] =
+    Ref.unsafe(Pass[T])
 
   private def initBehavior(ctx: ActorContext[T]): IO[BehaviorSpec[T]] =
     setup.eval(ctx).flatMap(setBehavior)

@@ -1,11 +1,10 @@
 package com.theater
 
 import cats.effect.IO
-
 import scala.concurrent.duration.FiniteDuration
 import scala.reflect.TypeTest
 
-type InitContext[T]   = ActorContext[T] => IO[BehaviorSpec[T]]
+type InitContext[T]   = ActorContext[T] => IO[BehaviorLens[T]]
 type Receiver[T]      = (ActorContext[T], T) => IO[BehaviorSpec[T]]
 type SignalHandler[T] = PartialFunction[LifeCycle, IO[Unit]]
 
@@ -36,41 +35,53 @@ sealed trait BehaviorSpec[T] extends Behavior[T]:
   def onIdle:        OnIdle
 end BehaviorSpec
 
-sealed class Pass[T] extends BehaviorSpec[T]:
+private sealed class Pass[T] extends BehaviorSpec[T]:
   override def onReceive:    OnReceive = (_, _) => Behaviors.same[T]
   override def onSignalEvent: OnSignal = PartialFunction.empty
-  override def onError:        OnError = Supervisor.resume[T]
+  override def onError:        OnError = Supervisor.stop[T]
   override def onIdle:          OnIdle = None
 end Pass
 
 //We need the type! Not the implementation.
-final class Same[T]    extends Pass[T]
-final class Restart[T] extends Pass[T]
-final class Stop[T]    extends Pass[T]
+private final class Same[T]    extends Pass[T]
+private final class Restart[T] extends Pass[T]
+private final class Stop[T]    extends Pass[T]
 
-private final case class BehaviorLens[T](
+final case class BehaviorLens[T] private(
   override val onReceive:     Receiver[T],
   override val onSignalEvent: SignalHandler[T],
   override val onError:       ErrorHandler[T],
   override val onIdle:        Option[OnTimeout[T]]
-) extends BehaviorSpec[T]
+) extends BehaviorSpec[T]:
+  def onSignal(sigHandler: SignalHandler[T]): BehaviorLens[T] =
+    this.copy(onSignalEvent = this.onSignalEvent.orElse(sigHandler))
 
-object Behaviors:
-  def setup[T](init: InitContext[T]): Behavior[T] =
-    SetupContext(init)
+  def onFailure[Ex <: Throwable](strategy: ErrorHandler[T])(using tt: TypeTest[Throwable, Ex]): BehaviorLens[T] =
+    val onError: ErrorHandler[T] = fromFunctor: ex =>
+      tt.unapply(ex).fold(IO.raiseError(ex))(strategy)
+    val errorHandler = fromFunctor(this.onError(_).handleErrorWith(onError))
+    this.copy(onError = errorHandler)
+  end onFailure
 
-  def empty[T]: BehaviorSpec[T] =
-    Pass[T]
+  def onIdleTrigger(timeout: FiniteDuration, onTimeout: T): BehaviorLens[T] =
+    this.copy(onIdle = Some(OnTimeout(timeout, onTimeout)))
+  
+end BehaviorLens
 
-  def receive[T](rcv: Receiver[T]): BehaviorSpec[T] =
+object BehaviorLens:
+  def init[T](rcv: Receiver[T]): BehaviorLens[T] =
     BehaviorLens[T](
       onReceive     = rcv,
       onSignalEvent = PartialFunction.empty,
       onError       = Supervisor.escalate[T],
       onIdle        = None
     )
-  end receive
+  end init
+end BehaviorLens
 
+object Behaviors:
+  def setup[T](init: InitContext[T]): Behavior[T]   = SetupContext(init)
+  def receive[T](rcv: Receiver[T]): BehaviorLens[T] = BehaviorLens.init[T](rcv)
   def stop[T]: IO[BehaviorSpec[T]] = IO.pure(Stop[T])
   def same[T]: IO[BehaviorSpec[T]] = IO.pure(Same[T])
 end Behaviors
@@ -87,23 +98,6 @@ object Supervisor:
   def resume[T]:   ErrorHandler[T] = fromFunctor { _ => Behaviors.same[T] }
   def escalate[T]: ErrorHandler[T] = fromFunctor { IO.raiseError }
 end Supervisor
-
-extension [T](inner: BehaviorSpec[T]) {
-  private def toLens: BehaviorLens[T] =
-    BehaviorLens(inner.onReceive, inner.onSignalEvent, inner.onError, inner.onIdle)
-
-  def onSignal(sigHandler: SignalHandler[T]): BehaviorSpec[T] =
-    toLens.copy(onSignalEvent = inner.onSignalEvent.orElse(sigHandler))
-
-  def onFailure[Ex <: Throwable](strategy: ErrorHandler[T])(using tt: TypeTest[Throwable, Ex]): BehaviorSpec[T] =
-    val onError: ErrorHandler[T] = fromFunctor: ex =>
-      tt.unapply(ex).fold(IO.raiseError(ex))(strategy)
-    val errorHandler = fromFunctor(inner.onError(_).handleErrorWith(onError))
-    toLens.copy(onError = errorHandler)
-
-  def onIdleTrigger(timeout: FiniteDuration, onTimeout: T): BehaviorSpec[T] =
-    toLens.copy(onIdle = Some(OnTimeout(timeout, onTimeout)))
-}
 
 extension [T](inner: Behavior[T]) {
   def spawn(name: String, mailBoxSettings: MailBoxSettings = MailBoxSettings.Unbounded): IO[ActorRef[T]] =

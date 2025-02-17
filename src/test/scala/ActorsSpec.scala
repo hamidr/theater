@@ -8,7 +8,7 @@ import cats.implicits.*
 import java.util.UUID
 import scala.concurrent.duration.*
 import com.theater.*
-import com.theater.LifeCycle.Terminated
+import com.theater.LifeCycle.{PostStop, Terminated}
 
 class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   "An Actor must onReceive only one message when only one message was sent to it" in {
@@ -67,7 +67,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     val nextGen = Behaviors.receive[Unit]: (ctx, _) =>
       counter.update(_ + 1) >> Behaviors.stop
 
-    def init(counting: Int, actorCount: Int): BehaviorSpec[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    def init(counting: Int, actorCount: Int): BehaviorLens[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       if actorCount == counting then
         IO.sleep(FiniteDuration(200, MILLISECONDS)) >> Behaviors.stop
       else for
@@ -126,7 +126,9 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
         _ <- proxy.send(Calculate(5, Plus))
         _ <- proxy.send(Calculate(7.1, Minus))
         _ <- proxy.send(Calculate(7.1, Minus))
-      yield Behaviors.empty
+      yield Behaviors.receive { (_, _) =>
+        Behaviors.same
+      }
     end init
 
     ActorSystem.run(init)
@@ -158,7 +160,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
   "A load balancer example" in {
     def initLoadBalancer[T](workerSize: Int, task: BehaviorSpec[T]): Behavior[T] = Behaviors.setup[T]: ctx =>
-      def balance(workers: Vector[ActorRef[T]], index: Int): BehaviorSpec[T] =
+      def balance(workers: Vector[ActorRef[T]], index: Int): BehaviorLens[T] =
         Behaviors.receive[T]: (_, msg) =>
           val next = if (index + 1) >= workerSize then 0 else index + 1
           workers(index).send(msg).as(balance(workers, next))
@@ -223,5 +225,25 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
     ActorSystem.run(logTimeout)
       >> proof.get.asserting(_ shouldBe List(0,0,0,1))
+  }
+
+  "ActorRef.stop should stop the actor, triggering a LifeCycle signal" in {
+    val testEffect = Ref.unsafe[IO, Boolean](false)
+
+    val test =
+      Behaviors.receive[Int]:
+        case (ctx, 5) => ctx.self.stop() >> Behaviors.same
+        case (_, 10) => Behaviors.stop
+        case (_, n) => Behaviors.same
+      .onSignal:
+        case PostStop => testEffect.set(true)
+
+    val task = for
+      ref <- test.spawn("test")
+      _ <- Seq.range(0, 10).evalMap(n => ref.send(n))
+      _ <- IO.sleep(200.millisecond)
+    yield ()
+
+    task >> testEffect.get.asserting(_ shouldBe true)
   }
 }
