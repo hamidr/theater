@@ -24,7 +24,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   }
 
   "Must handle compose exception handling and applying it from inner to outer layer" in {
-    val start: BehaviorLens[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    val start: Behavior[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       val z: Int = ???
       IO.delay(z + 1) >> Behaviors.same
     .onFailure[java.lang.ArithmeticException](Supervisor.resume)
@@ -36,7 +36,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   "Must restart from its starting state/behavior on failure as specified" in {
     val proof = Ref.unsafe[IO, List[Int]](Nil)
 
-    def testSubject(state: Int): BehaviorSpec[Unit] =
+    def testSubject(state: Int): Behavior[Unit] =
       Behaviors.receive[Unit]: (ctx, _) =>
         val causeToRestart = proof.get
           .map(_.size)
@@ -49,7 +49,7 @@ class SupervisorSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     .onFailure[java.lang.ArithmeticException](Supervisor.restart)
     .onFailure[NotImplementedError](Supervisor.stop)
 
-    val start: BehaviorLens[Unit] = Behaviors.receive: (ctx, _) =>
+    val start: Behavior[Unit] = Behaviors.receive: (ctx, _) =>
       for
         newActor <- ctx.spawnAnonymously(testSubject(0), "testSubject")
         _        <- Seq.range(0, 10).evalTap(_ => newActor.send(()))

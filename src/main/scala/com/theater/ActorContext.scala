@@ -8,8 +8,8 @@ import java.util.UUID
 trait ActorContext[T]:
   def self: ActorRef[T]
   def watch(actorRef: ActorRef[?]): IO[Unit]
-  def spawn[A](behavior: Behavior[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]]
-  def spawnAnonymously[A](behavior: Behavior[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]]
+  def spawn[A](behavior: BehaviorFlow[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]]
+  def spawnAnonymously[A](behavior: BehaviorFlow[A], name: String, mailSettings: MailBoxSettings = Unbounded): IO[ActorRef[A]]
 end ActorContext
 
 private class Context[T](
@@ -42,7 +42,7 @@ private class Context[T](
   end watch
 
   override def spawnAnonymously[A](
-    setup: Behavior[A],
+    setup: BehaviorFlow[A],
     name: String,
     mailSettings: MailBoxSettings
   ): IO[ActorRef[A]] =
@@ -57,7 +57,7 @@ private class Context[T](
   end spawnAnonymously
 
   override def spawn[A](
-    setup: Behavior[A],
+    setup: BehaviorFlow[A],
     name: String,
     mailSettings: MailBoxSettings
   ): IO[ActorRef[A]] =

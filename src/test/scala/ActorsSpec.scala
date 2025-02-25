@@ -67,7 +67,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
     val nextGen = Behaviors.receive[Unit]: (ctx, _) =>
       counter.update(_ + 1) >> Behaviors.stop
 
-    def init(counting: Int, actorCount: Int): BehaviorLens[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
+    def init(counting: Int, actorCount: Int): Behavior[Unit] = Behaviors.receive[Unit]: (ctx, _) =>
       if actorCount == counting then
         IO.sleep(FiniteDuration(200, MILLISECONDS)) >> Behaviors.stop
       else for
@@ -93,7 +93,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
     case class CalcAndSendBack(from: ActorRef[SendToOrGetCalculated], msg: Calculate)
 
-    def calculator(acc: Double = 0, iteration: Int): BehaviorSpec[CalcAndSendBack] =
+    def calculator(acc: Double = 0, iteration: Int): Behavior[CalcAndSendBack] =
       Behaviors.receive[CalcAndSendBack]: (ctx, msg) =>
         val result = msg.msg.op match
           case Plus => acc + msg.msg.n
@@ -117,7 +117,7 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
     val listRef = Ref.unsafe[IO, List[Double]](Nil)
 
-    def init: Behavior[Unit] = Behaviors.setup: ctx =>
+    def init: BehaviorFlow[Unit] = Behaviors.setup: ctx =>
       for
         calc  <- ctx.spawn(calculator(0, 1), "incr")
         proxy <- ctx.spawn(sendToGetCalculated(n => listRef.update(_.appended(n)), calc), "just_send")
@@ -159,8 +159,8 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   }
 
   "A load balancer example" in {
-    def initLoadBalancer[T](workerSize: Int, task: BehaviorSpec[T]): Behavior[T] = Behaviors.setup[T]: ctx =>
-      def balance(workers: Vector[ActorRef[T]], index: Int): BehaviorLens[T] =
+    def initLoadBalancer[T](workerSize: Int, task: Behavior[T]): BehaviorFlow[T] = Behaviors.setup[T]: ctx =>
+      def balance(workers: Vector[ActorRef[T]], index: Int): Behavior[T] =
         Behaviors.receive[T]: (_, msg) =>
           val next = if (index + 1) >= workerSize then 0 else index + 1
           workers(index).send(msg).as(balance(workers, next))

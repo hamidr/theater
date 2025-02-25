@@ -8,7 +8,7 @@ The following code results in printing "Hello World!" by creating an actor and s
 
 ```scala 3
 // A behavior is how an actor handles a message
-// Every actor after handling a message must return a new BehaviorSpec, here by using "Behaviors.same"
+// Every actor after handling a message must return a new Behavior, here by using "Behaviors.same"
 // the next behavior stays the same.
 val aPrinter = 
   Behaviors.receive[String]: (_, msg) =>
@@ -40,9 +40,9 @@ You can read the code like this:
     enum State:
       case Var(v: String)
       case Close
-    
+
     val proof = Ref.unsafe[IO, List[String]](Nil)
-    
+
     val logVar = Behaviors.receive[State]:
       case (_, State.Close) => Behaviors.stop
       case (_, State.Var(msg)) =>
@@ -50,22 +50,21 @@ You can read the code like this:
           IO.sleep(200.millisecond) >>
           Behaviors.same
     .onIdleTrigger(100.millisecond, State.Close)
-    
+
     val init = Behaviors.setup[State]: ctx =>
       Seq("v1", "v2").evalTap: name =>
         ctx.self.send(State.Var(name))
       .as(logVar)
-    
+
     init.spawn("test")
       >> IO.sleep(150.milliseconds)
       >> proof.get.asserting(_ shouldBe List("v1"))
-
 ```
 
 This is a very simple and generic load balancer for a behavior:
 
 ```scala 3
-    def initLoadBalancer[T](workerSize: Int, task: Behavior[T]): BehaviorSetup[T] = Behaviors.setup[T]: ctx =>
+    def initLoadBalancer[T](workerSize: Int, task: Behavior[T]): BehaviorFlow[T] = Behaviors.setup[T]: ctx =>
       def balance(workers: Vector[ActorRef[T]], index: Int): Behavior[T] =
         Behaviors.receive[T]: (_, msg) =>
           val next = if (index + 1) >= workerSize then 0 else index + 1
@@ -84,10 +83,8 @@ This is a very simple and generic load balancer for a behavior:
     val init = Behaviors.receive[Unit]: (ctx, _) =>
       for
         ref   <- ctx.spawn(initLoadBalancer(10, updateAndDie), "load_balancer")
-        _     <- Seq.range(0, 100, 1).evalTap(ref.send)
+        _     <- Seq.range(0, 100, 1).evalTap(rand => ref.send(rand))
         _     <- IO.sleep(200.milliseconds)
         state <- Behaviors.stop[Unit]
       yield state
-
-    selfStart(init) >> proof.get.asserting(proofValue => proofValue.size shouldBe 10)
 ```
