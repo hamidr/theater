@@ -56,7 +56,7 @@ final class Actor[T](
   stopCommand: SignallingRef[IO, Boolean],
   deathSignal: Channel[IO, Terminated],
   deathReport: Channel[IO, Terminated],
-  setup: Behavior[T]
+  setup: BehaviorFlow[T]
 ) extends ActorImpl[T]:
   import LifeCycle.*
 
@@ -68,16 +68,16 @@ final class Actor[T](
       >> deathSignal.close.void
       >> isDead.set(true)
 
-  private val refBehavior: Ref[IO, BehaviorSpec[T]] =
-    Ref.unsafe(Pass[T])
+  private val refBehavior: Ref[IO, Behavior[T]] =
+    Ref.unsafe(null)
 
-  private def initBehavior(ctx: ActorContext[T]): IO[BehaviorSpec[T]] =
+  private def initBehavior(ctx: ActorContext[T]): IO[Behavior[T]] =
     setup.eval(ctx).flatMap(setBehavior)
 
-  private def currentBehavior: IO[BehaviorSpec[T]] =
+  private def currentBehavior: IO[Behavior[T]] =
     refBehavior.get
 
-  private def setBehavior(next: BehaviorSpec[T]): IO[BehaviorSpec[T]] =
+  private def setBehavior(next: Behavior[T]): IO[Behavior[T]] =
     refBehavior.set(next).as(next)
 
   private def processDeathEvents(ctx: ActorContext[T]): Process =
@@ -86,10 +86,10 @@ final class Actor[T](
     deathReport.stream.evalTap(onSignal).drain
   end processDeathEvents
 
-  private def raiseSignal(ctx: ActorContext[T], newState: LifeCycle): BehaviorSpec[T] => IO[Unit] = behavior =>
+  private def raiseSignal(ctx: ActorContext[T], newState: LifeCycle): Behavior[T] => IO[Unit] = behavior =>
     val observeAct = newState match
       case ter: Terminated => deathSignal.send(ter).void
-      case PreRestart | PreStart | PostStop => IO.unit
+      case _ => IO.unit
 
     observeAct >> behavior.onSignalEvent.lift(newState).getOrElse(IO.unit)
   end raiseSignal
@@ -113,7 +113,7 @@ final class Actor[T](
   def stop(): IO[Unit] =
     stopCommand.set(false)
 
-  private def withTimeout(behavior: BehaviorSpec[T]): Pipe[IO, T, T] = s =>
+  private def withTimeout(behavior: Behavior[T]): Pipe[IO, T, T] = s =>
     behavior.onIdle
       .fold(s): t =>
         s.timeoutOnPull(t.timeout)
@@ -144,7 +144,7 @@ final class Actor[T](
               case _: Same[T]    => IO.pure(true)
               case _: Restart[T] => raiseSignal(ctx, PreRestart)(behavior) >> initBehavior(ctx).as(false)
               case _: Stop[T]    => IO.raiseError(StopFlow)
-              case state         => (behavior != state).foldM(IO.pure(true))(setBehavior(state).as(false))
+              case state: Behavior[T] => (behavior != state).foldM(IO.pure(true))(setBehavior(state).as(false))
             .takeWhile(state => state)
             .drain
     end handleMessages
@@ -167,7 +167,7 @@ final class Actor[T](
 end Actor
 
 object Actor:
-  def init[T](name: String, mailBox: MessageBox[T], setup: Behavior[T]): IO[Actor[T]] =
+  def init[T](name: String, mailBox: MessageBox[T], setup: BehaviorFlow[T]): IO[Actor[T]] =
     for
       id <- UUIDGen[IO].randomUUID
       deathSignal <- Channel.bounded[IO, Terminated](1)

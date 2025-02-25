@@ -40,7 +40,7 @@ class BehaviorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
   "Must raise signals while the state of actor is changing" in {
     val proof = Ref.unsafe[IO, List[LifeCycle]](Nil)
     val state = Ref.unsafe[IO, List[Int]](Nil)
-    def testSubject(cnt: Int): BehaviorLens[Unit] =
+    def testSubject(cnt: Int): Behavior[Unit] =
       Behaviors.receive[Unit]: (ctx, _) =>
         val causeToRestart = state.get.map(_.size).flatMap: total =>
           if total == 10 then Behaviors.stop
