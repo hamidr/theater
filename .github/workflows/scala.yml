@@ -1,7 +1,5 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+env:
+  JAVA_OPTS: -Xms2048M -Xmx2048M -Xss6M -XX:ReservedCodeCacheSize=256M -Dfile.encoding=UTF-8
 
 name: Scala CI
 
@@ -27,8 +25,10 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
         cache: 'sbt'
-    - name: Run tests
-      run: sbt test
+    - uses: sbt/setup-sbt@v1
+    - name: Build and test
+      shell: bash
+      run: sbt -v +test
       # Optional: This step uploads information to the GitHub dependency graph and unblocking Dependabot alerts for the repository
     - name: Upload dependency graph
       uses: scalacenter/sbt-dependency-submission@ab086b50c947c9774b70f39fc7f6e20ca2706c91
