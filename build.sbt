@@ -1,5 +1,5 @@
 name := "theater"
-version := "0.6"
+version := "0.7"
 scalaVersion := "3.6.2"
 maintainer := "hamidr.dev@gmail.com"
 
@@ -9,7 +9,7 @@ libraryDependencies ++= Seq(
   "co.fs2"        %% "fs2-core" % "3.12.0",
   "org.scalatest" %% "scalatest" % "3.2.19" % Test,
   "org.typelevel" %% "cats-effect-testing-scalatest" % "1.6.0" % Test,
-  "org.scalameta" %% "munit" % "1.1.0" % Test
+  "org.scalameta" %% "munit" % "1.1.1" % Test
 )
 
 enablePlugins(JavaAppPackaging)

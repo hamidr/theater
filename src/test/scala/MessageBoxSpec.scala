@@ -64,7 +64,7 @@ class MessageBoxSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
 
     val test =
       Behaviors.receive[Int]:
-        case (_, 0) => IO.sleep(200.millisecond) >> testEffect.update(_.appended(0)) >> Behaviors.same
+        case (_, 0) => IO.sleep(300.millisecond) >> testEffect.update(_.appended(0)) >> Behaviors.same
         case (_, 10) => Behaviors.stop
         case (_, n) => testEffect.update(_.appended(n)) >> Behaviors.same
 

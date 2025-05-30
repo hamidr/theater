@@ -6,7 +6,7 @@ import cats.implicits.*
 import com.theater
 import com.theater.LifeCycle.Terminated
 import fs2.*
-import fs2.concurrent.{Channel, SignallingRef}
+import fs2.concurrent.{SignallingRef, Topic}
 
 import java.util.UUID
 import scala.concurrent.TimeoutException
@@ -54,8 +54,8 @@ final class Actor[T](
   val name: String,
   mailBox: MessageBox[T],
   stopCommand: SignallingRef[IO, Boolean],
-  deathSignal: Channel[IO, Terminated],
-  deathReport: Channel[IO, Terminated],
+  deathSignal: Topic[IO, Terminated],
+  deathReport: Topic[IO, Terminated],
   setup: BehaviorFlow[T]
 ) extends ActorImpl[T]:
   import LifeCycle.*
@@ -83,22 +83,22 @@ final class Actor[T](
   private def processDeathEvents(ctx: ActorContext[T]): Process =
     def onSignal: LifeCycle => IO[Unit] = state =>
       currentBehavior.flatMap(_.onSignalEvent(state))
-    deathReport.stream.evalTap(onSignal).drain
+    deathReport.subscribe(1).evalTap(onSignal).drain
   end processDeathEvents
 
   private def raiseSignal(ctx: ActorContext[T], newState: LifeCycle): Behavior[T] => IO[Unit] = behavior =>
     val observeAct = newState match
-      case ter: Terminated => deathSignal.send(ter).void
+      case ter: Terminated => deathSignal.publish1(ter).void
       case _ => IO.unit
 
     observeAct >> behavior.onSignalEvent.lift(newState).getOrElse(IO.unit)
   end raiseSignal
 
   override def events: Stream[IO, LifeCycle.Terminated] =
-    deathSignal.stream
+    deathSignal.subscribe(1)
 
   override def notify(ter: LifeCycle.Terminated): IO[Unit] =
-    deathReport.send(ter).void
+    deathReport.publish1(ter).void
 
   override def send(msg: T): IO[Unit] =
     isDead.get.flatMap:
@@ -170,8 +170,8 @@ object Actor:
   def init[T](name: String, mailBox: MessageBox[T], setup: BehaviorFlow[T]): IO[Actor[T]] =
     for
       id <- UUIDGen[IO].randomUUID
-      deathSignal <- Channel.bounded[IO, Terminated](1)
-      deathReport <- Channel.bounded[IO, Terminated](1)
+      deathSignal <- Topic[IO, Terminated]
+      deathReport <- Topic[IO, Terminated]
       stopCommand <- SignallingRef.of[IO, Boolean](true)
     yield Actor[T](id, name, mailBox, stopCommand, deathSignal, deathReport, setup)
   end init

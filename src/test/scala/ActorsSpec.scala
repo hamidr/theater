@@ -145,13 +145,12 @@ class ActorsSpec extends AsyncFreeSpec with AsyncIOSpec with Matchers {
       for
         ref <- ctx.spawn(dying, "will_die_soon")
         _ <- proof.update(_.updated(ref.id, 0))
-        _ <- ctx.watch(ref)
         _ <- ref.send(())
         next <- Behaviors.same[Unit]
       yield next
     .onSignal:
       case Terminated(ref, _:java.lang.ArithmeticException) =>
-        proof.update { map => map.updated(ref.id, map.getOrElse(ref.id, -1) + 1) }
+        proof.update { map => map.updated(ref.id, map.getOrElse(ref.id, 0) + 1) }
 
     selfStart(init).timeout(200.milli)
       .attempt >> proof.get
